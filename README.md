@@ -88,11 +88,13 @@ wandb:          val/iou 0.64966
 wandb:         val/loss 0.5767
 wandb:               +2 ...
 wandb:
-wandb: 🚀 View run prime-river-1 at: https://wandb.ai/robmarkcole/geotessera-solarfarm/runs/8clik73a
-wandb: _ÿ View project at: https://wandb.ai/robmarkcole/geotessera-solarfarm
-wandb: Synced 6 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
-wandb: Find logs at: ./wandb/run-20260629_111415-8clik73a/logs
 ```
+
+![Training loss](figs/loss.png)
+
+![Validation loss](figs/val.png)
+
+![Training charts](figs/charts.png)
 
 finally evaluate
 
