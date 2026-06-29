@@ -15,6 +15,7 @@ import numpy as np
 import rasterio
 import torch
 import torch.nn.functional as F
+import wandb
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
@@ -177,6 +178,30 @@ def main():
     num_params = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {num_params:,}")
 
+    wandb.init(
+        project="geotessera-solarfarm",
+        config={
+            "train_patches_dir": TRAIN_PATCHES_DIR,
+            "val_patches_dir": VAL_PATCHES_DIR,
+            "model_path": MODEL_PATH,
+            "batch_size": BATCH_SIZE,
+            "learning_rate": LEARNING_RATE,
+            "epochs": EPOCHS,
+            "patience": PATIENCE,
+            "crop_size": CROP_SIZE,
+            "model": "UNet.nano",
+            "in_channels": 128,
+            "out_channels": 1,
+            "optimizer": "Adam",
+            "weight_decay": 1e-4,
+            "scheduler": "CosineAnnealingLR",
+            "train_samples": len(train_dataset),
+            "val_samples": len(val_dataset),
+            "num_params": num_params,
+            "device": str(device),
+        },
+    )
+
     optimizer = Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS)
 
@@ -186,47 +211,72 @@ def main():
 
     print(f"Training for up to {EPOCHS} epochs...")
 
-    for epoch in range(EPOCHS):
-        train_loss, train_iou = train_epoch(model, train_loader, optimizer, device)
-        val_loss, val_metrics = validate(model, val_loader, device)
+    try:
+        for epoch in range(EPOCHS):
+            train_loss, train_iou = train_epoch(model, train_loader, optimizer, device)
+            val_loss, val_metrics = validate(model, val_loader, device)
 
-        print(
-            f"Epoch {epoch + 1:3d}/{EPOCHS} | "
-            f"Train Loss: {train_loss:.4f}, IoU: {train_iou:.4f} | "
-            f"Val Loss: {val_loss:.4f}, IoU: {val_metrics['iou']:.4f}"
-        )
+            print(
+                f"Epoch {epoch + 1:3d}/{EPOCHS} | "
+                f"Train Loss: {train_loss:.4f}, IoU: {train_iou:.4f} | "
+                f"Val Loss: {val_loss:.4f}, IoU: {val_metrics['iou']:.4f}"
+            )
 
-        # Save best model
-        if val_metrics["iou"] > best_iou:
-            best_iou = val_metrics["iou"]
-            torch.save({
-                "epoch": epoch,
-                "model_state_dict": model.state_dict(),
-                "model_config": model.config,
-                "iou": best_iou,
-                "mean": train_dataset.mean.tolist(),
-                "std": train_dataset.std.tolist(),
-            }, model_save_path)
-            print(f"  -> Saved best model (IoU: {best_iou:.4f})")
-            patience_counter = 0
-        else:
-            patience_counter += 1
+            saved_best = val_metrics["iou"] > best_iou
 
-        scheduler.step()
+            # Save best model
+            if saved_best:
+                best_iou = val_metrics["iou"]
+                torch.save({
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "model_config": model.config,
+                    "iou": best_iou,
+                    "mean": train_dataset.mean.tolist(),
+                    "std": train_dataset.std.tolist(),
+                }, model_save_path)
+                print(f"  -> Saved best model (IoU: {best_iou:.4f})")
+                patience_counter = 0
+            else:
+                patience_counter += 1
 
-        if patience_counter >= PATIENCE:
-            print(f"Early stopping (no improvement for {PATIENCE} epochs)")
-            break
+            wandb.log(
+                {
+                    "epoch": epoch + 1,
+                    "learning_rate": optimizer.param_groups[0]["lr"],
+                    "train/loss": train_loss,
+                    "train/iou": train_iou,
+                    "val/loss": val_loss,
+                    "val/iou": val_metrics["iou"],
+                    "val/precision": val_metrics["precision"],
+                    "val/recall": val_metrics["recall"],
+                    "best_iou": best_iou,
+                    "saved_best": int(saved_best),
+                    "patience_counter": patience_counter,
+                },
+                step=epoch + 1,
+            )
 
-    print(f"\nTraining complete. Best IoU: {best_iou:.4f}")
-    print(f"Model saved to: {model_save_path}")
+            scheduler.step()
 
-    # Load best model and save validation predictions as GeoTIFFs
-    print("\nSaving validation predictions...")
-    checkpoint = torch.load(model_save_path, weights_only=True)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    save_validation_predictions(model, val_dataset, device, Path("tmp/train_tifs/val_predictions"))
-    print(f"Validation predictions saved to tmp/train_tifs/val_predictions/")
+            if patience_counter >= PATIENCE:
+                print(f"Early stopping (no improvement for {PATIENCE} epochs)")
+                break
+
+        wandb.summary["best_iou"] = best_iou
+        wandb.summary["model_path"] = str(model_save_path)
+
+        print(f"\nTraining complete. Best IoU: {best_iou:.4f}")
+        print(f"Model saved to: {model_save_path}")
+
+        # Load best model and save validation predictions as GeoTIFFs
+        print("\nSaving validation predictions...")
+        checkpoint = torch.load(model_save_path, weights_only=True)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        save_validation_predictions(model, val_dataset, device, Path("tmp/train_tifs/val_predictions"))
+        print("Validation predictions saved to tmp/train_tifs/val_predictions/")
+    finally:
+        wandb.finish()
 
 
 if __name__ == "__main__":

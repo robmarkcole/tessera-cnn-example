@@ -7,6 +7,9 @@ This project uses [uv](https://github.com/astral-sh/uv)
 First you will want to download the OSM solar farm UK data and prepare the tiles:
 
 ```
+sudo apt update             
+sudo apt install gdal-bin libgdal-dev python3-gdal -y
+
 uv run prepare.py --download
 ```
 
